@@ -15,6 +15,7 @@ import ij.process.LUT;
 import java.awt.AWTEvent;
 import java.awt.Checkbox;
 import java.awt.Choice;
+import java.awt.Color;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Vector;
@@ -33,6 +34,15 @@ public class Auto_Focus implements PlugIn, DialogListener
   /** Plugin's current version */
   public static final String PLUGIN_VERSION = "v0.1";
   
+  public static final int YES=0;
+  public static final int NO=1;
+  public static final int BOTH =2;
+  
+
+  public static final int FLUORESCENT_ONLY=0;
+  public static final int WITH_BRIGHTFIELD=1;
+  
+  
   /* (non-Javadoc)
    * @see ij.plugin.PlugIn#run(java.lang.String)
    */
@@ -49,6 +59,8 @@ public class Auto_Focus implements PlugIn, DialogListener
     int channelNr = imp.getNChannels();
     final GenericDialog gd = new GenericDialog("Parameters");
     String[] channelArray = new String[channelNr];
+    String[] yesNoArray = {"Yes", "No", "Both"};
+    String[] channelOptionArray = {"Only Fluorescent", "With BrightField", "Both"};
     
     for(int i=0;i<channelNr;i++)
       channelArray[i]=(i+1)+"";
@@ -61,6 +73,8 @@ public class Auto_Focus implements PlugIn, DialogListener
     for(int i=0;i<channelArray.length;i++)
       gd.addCheckbox(channelArray[i], false);
     ((Checkbox)gd.getCheckboxes().get(0)).setEnabled(false);
+    gd.addChoice("Merge All Channel", yesNoArray ,"Both");
+    gd.addChoice("Which Channel", channelOptionArray ,"Both");
     gd.addDialogListener(this);
     gd.showDialog();
     if (gd.wasCanceled())
@@ -80,7 +94,28 @@ public class Auto_Focus implements PlugIn, DialogListener
       }
       int degreeofFocusMethod = gd.getNextChoiceIndex();
       int projectionMethod = gd.getNextChoiceIndex();
-      generateMIPBrightFieldStack(imp, fluorescentChannelArrayList, brightfieldChannel, projectionMethod, degreeofFocusMethod);
+      int mergeChannel = gd.getNextChoiceIndex();
+      int channelOption = gd.getNextChoiceIndex();
+      
+      if(mergeChannel==BOTH && channelOption == BOTH)
+      {
+        generateMIPBrightFieldStack(imp, fluorescentChannelArrayList, brightfieldChannel, projectionMethod, degreeofFocusMethod, YES, FLUORESCENT_ONLY);
+        generateMIPBrightFieldStack(imp, fluorescentChannelArrayList, brightfieldChannel, projectionMethod, degreeofFocusMethod, YES, WITH_BRIGHTFIELD);
+        generateMIPBrightFieldStack(imp, fluorescentChannelArrayList, brightfieldChannel, projectionMethod, degreeofFocusMethod, NO, FLUORESCENT_ONLY);
+        generateMIPBrightFieldStack(imp, fluorescentChannelArrayList, brightfieldChannel, projectionMethod, degreeofFocusMethod, NO, WITH_BRIGHTFIELD);
+      }
+      else if(mergeChannel==BOTH)
+      {
+        generateMIPBrightFieldStack(imp, fluorescentChannelArrayList, brightfieldChannel, projectionMethod, degreeofFocusMethod, YES, channelOption);
+        generateMIPBrightFieldStack(imp, fluorescentChannelArrayList, brightfieldChannel, projectionMethod, degreeofFocusMethod, NO, channelOption);
+      }
+      else if(channelOption==BOTH)
+      {
+        generateMIPBrightFieldStack(imp, fluorescentChannelArrayList, brightfieldChannel, projectionMethod, degreeofFocusMethod, mergeChannel, FLUORESCENT_ONLY);
+        generateMIPBrightFieldStack(imp, fluorescentChannelArrayList, brightfieldChannel, projectionMethod, degreeofFocusMethod, mergeChannel, WITH_BRIGHTFIELD);
+      }
+      else
+        generateMIPBrightFieldStack(imp, fluorescentChannelArrayList, brightfieldChannel, projectionMethod, degreeofFocusMethod, mergeChannel, channelOption);
     }
   }
 
@@ -130,37 +165,111 @@ public class Auto_Focus implements PlugIn, DialogListener
    * {@link ij.plugin.ZProjector.SUM_METHOD}, {@link ij.plugin.ZProjector.SD_METHOD} and
    * {@link ij.plugin.ZProjector.MEDIAN_METHOD}.
    */
-  public void generateMIPBrightFieldStack(ImagePlus imp, ArrayList<Integer> fluorescentChannelList, int brightfieldChannel, int zProjectionMethod, int degreeofFocusMethod)
+  public void generateMIPBrightFieldStack(ImagePlus imp, ArrayList<Integer> fluorescentChannelList, 
+      int brightfieldChannel, int zProjectionMethod, int degreeofFocusMethod, int mergeChannel, 
+      int channelOption)
   {
+    ImagePlus brightfieldImp = null;
+    
     //1. Generate the BestFocus BrightField Stack
-    ImagePlus brightfieldImp = computeAutoFocusStack(imp, brightfieldChannel, degreeofFocusMethod);
+    if(channelOption!=FLUORESCENT_ONLY)
+    {
+      brightfieldImp = computeAutoFocusStack(imp, brightfieldChannel, degreeofFocusMethod);
+    }
     //2. Keep the LUT
     LUT[] lutArray = imp.getLuts();    
     //3. For each selected fluorescent channel, compute the Maximum intensity 
     //   projection and create a new Stack with 1st channel is the MIP then 2nd
     //   channel is the best focus brightfield and display them
     if(fluorescentChannelList.size()>0)
-      for (int i=0; i< fluorescentChannelList.size(); i++)
+    {
+      if(mergeChannel==NO)
+        for (int i=0; i< fluorescentChannelList.size(); i++)
+        {
+          ImagePlus[] impArray = null;
+          if( channelOption == FLUORESCENT_ONLY)
+            impArray = new ImagePlus[1];
+          else if(channelOption !=FLUORESCENT_ONLY)
+            impArray = new ImagePlus[2]; 
+          //ImagePlus[] impArray = new ImagePlus[2];
+          int mipChannel= fluorescentChannelList.get(i);
+          System.out.println("MIP on channel :"+mipChannel);
+          impArray[0]=getZProjection(imp, mipChannel, zProjectionMethod);
+          ImagePlus result;
+          if(channelOption!=FLUORESCENT_ONLY)
+          {
+            impArray[1]=brightfieldImp.duplicate();
+            result = RGBStackMerge.mergeChannels(impArray,false);
+          }
+          else
+            result = impArray[0];
+          if(channelOption!=FLUORESCENT_ONLY)
+          {
+            CompositeImage projImageComp = new CompositeImage(result);
+            //Apply the original LUT
+            //projImageComp.setChannelLut(lutArray[mipChannel-1], 1);
+            //projImageComp.setChannelLut(lutArray[brightfieldChannel-1], 2);
+            projImageComp.setChannelLut(lutArray[mipChannel-1], 1);
+            projImageComp.setChannelLut(LUT.createLutFromColor(Color.GRAY), 2);
+            projImageComp.setTitle("BrightField and Channel "+fluorescentChannelList.get(i));
+            projImageComp.setMode(CompositeImage.COMPOSITE);
+            projImageComp.show();
+          }
+          else
+          {
+            //System.out.println("Set for channel "+i+ " LUT "+(mipChannel-1));
+            result.setTitle("Channel "+fluorescentChannelList.get(i));
+            result.show();
+            //result.getStack().setColorModel(lutArray[mipChannel-1]);
+            result.getProcessor().setLut(lutArray[mipChannel-1]);
+            result.updateAndDraw();
+          }
+        }
+      else //if(channelOption !=BRIGHTFIELD_ONLY)
       {
-        ImagePlus[] impArray = new ImagePlus[2];
-        int mipChannel= fluorescentChannelList.get(i);
-        System.out.println("MIP on channel :"+mipChannel);
-        impArray[0]=getZProjection(imp, mipChannel, ZProjector.MAX_METHOD);
-        if(i>0)
-          impArray[1]=brightfieldImp.duplicate();
+        ImagePlus[] impArray = null;
+        if(channelOption !=FLUORESCENT_ONLY)
+          impArray = new ImagePlus[fluorescentChannelList.size()+1];    
         else
-          impArray[1]=brightfieldImp.duplicate();
+          impArray = new ImagePlus[fluorescentChannelList.size()]; //No BrightField
+        for (int i=0; i< fluorescentChannelList.size(); i++)
+        {
+          int mipChannel= fluorescentChannelList.get(i);
+          System.out.println("MIP on channel :"+mipChannel);
+          impArray[i]=getZProjection(imp, mipChannel, zProjectionMethod);
+        }
+        if(channelOption!=FLUORESCENT_ONLY)
+          impArray[fluorescentChannelList.size()]=brightfieldImp.duplicate();
         ImagePlus result = RGBStackMerge.mergeChannels(impArray,false);
         CompositeImage projImageComp = new CompositeImage(result);
+        String title= "";
+        if(fluorescentChannelList.size()>1)
+          title="Merge ";
+        if(channelOption!=FLUORESCENT_ONLY)
+          title=title+" Brightfield";
+          
         //Apply the original LUT
-        projImageComp.setChannelLut(lutArray[mipChannel-1], 1);
-        projImageComp.setChannelLut(lutArray[brightfieldChannel-1], 2);
-        projImageComp.setTitle("Channel "+fluorescentChannelList.get(i));
+        for (int i=0; i< fluorescentChannelList.size(); i++)
+        {
+          int mipChannel= fluorescentChannelList.get(i);
+          projImageComp.setChannelLut(lutArray[mipChannel-1], i+1);
+          title = title+"-Channel "+fluorescentChannelList.get(i);
+          //projImageComp.setTitle("Channel "+fluorescentChannelList.get(i));
+        }
+        projImageComp.setTitle(title);
+        
+        //projImageComp.setChannelLut(lutArray[brightfieldChannel-1], 2);
+        if(channelOption!=FLUORESCENT_ONLY)
+          projImageComp.setChannelLut(LUT.createLutFromColor(Color.GRAY), fluorescentChannelList.size()+1);
         projImageComp.setMode(CompositeImage.COMPOSITE);
         projImageComp.show();
+        
       }
+    }
     else
       brightfieldImp.show();
+      brightfieldImp.getProcessor().setLut(LUT.createLutFromColor(Color.GRAY));
+      brightfieldImp.updateAndDraw();
       
   }
   
