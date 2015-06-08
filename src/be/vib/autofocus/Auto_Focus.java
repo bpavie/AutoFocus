@@ -66,13 +66,15 @@ public class Auto_Focus implements PlugIn, DialogListener
       channelArray[i]=(i+1)+"";
     gd.addChoice("Select BrigthField Channel: ", channelArray,"1");
     gd.addChoice("Best Focus Method : ", FocusMeasure.METHODS, FocusMeasure.METHODS[2]);
+    gd.addCheckbox("Use Best Plane from Britghfield instead of Projection", false);
+    gd.setInsets(0,20,0);
     gd.addChoice("Projection type: ", ZProjector.METHODS, ZProjector.METHODS[1]);
     gd.setInsets(0,0,5);
     gd.addMessage("Select the Fluorescent Channel you want to process: ");
     gd.setInsets(0,20,0);
     for(int i=0;i<channelArray.length;i++)
       gd.addCheckbox(channelArray[i], false);
-    ((Checkbox)gd.getCheckboxes().get(0)).setEnabled(false);
+    ((Checkbox)gd.getCheckboxes().get(1)).setEnabled(false);
     gd.addChoice("Merge All Channel", yesNoArray ,"Both");
     gd.addChoice("Which Channel", channelOptionArray ,"Both");
     gd.addDialogListener(this);
@@ -87,35 +89,38 @@ public class Auto_Focus implements PlugIn, DialogListener
       @SuppressWarnings("unchecked")
       Vector<Checkbox> checkBoxVector = (Vector<Checkbox>) gd.getCheckboxes();
       ArrayList<Integer> fluorescentChannelArrayList = new ArrayList<Integer>();
-      for (int i=0; i<checkBoxVector.size(); i++)
+      boolean useBestFocusInsteadOfProjection=checkBoxVector.get(0).getState();
+      for (int i=1; i<checkBoxVector.size(); i++)
       {
         if(checkBoxVector.get(i).getState())
-          fluorescentChannelArrayList.add(i+1);
+          fluorescentChannelArrayList.add(i);
       }
       int degreeofFocusMethod = gd.getNextChoiceIndex();
       int projectionMethod = gd.getNextChoiceIndex();
       int mergeChannel = gd.getNextChoiceIndex();
       int channelOption = gd.getNextChoiceIndex();
       
+      BestFocusStackResult resultBrightfield=null;
+      
       if(mergeChannel==BOTH && channelOption == BOTH)
       {
-        generateMIPBrightFieldStack(imp, fluorescentChannelArrayList, brightfieldChannel, projectionMethod, degreeofFocusMethod, YES, FLUORESCENT_ONLY);
-        generateMIPBrightFieldStack(imp, fluorescentChannelArrayList, brightfieldChannel, projectionMethod, degreeofFocusMethod, YES, WITH_BRIGHTFIELD);
-        generateMIPBrightFieldStack(imp, fluorescentChannelArrayList, brightfieldChannel, projectionMethod, degreeofFocusMethod, NO, FLUORESCENT_ONLY);
-        generateMIPBrightFieldStack(imp, fluorescentChannelArrayList, brightfieldChannel, projectionMethod, degreeofFocusMethod, NO, WITH_BRIGHTFIELD);
+        resultBrightfield = generateMIPBrightFieldStack(imp, fluorescentChannelArrayList, brightfieldChannel, projectionMethod, degreeofFocusMethod, YES, FLUORESCENT_ONLY, useBestFocusInsteadOfProjection, resultBrightfield);
+        resultBrightfield = generateMIPBrightFieldStack(imp, fluorescentChannelArrayList, brightfieldChannel, projectionMethod, degreeofFocusMethod, YES, WITH_BRIGHTFIELD, useBestFocusInsteadOfProjection, resultBrightfield);
+        resultBrightfield = generateMIPBrightFieldStack(imp, fluorescentChannelArrayList, brightfieldChannel, projectionMethod, degreeofFocusMethod, NO, FLUORESCENT_ONLY, useBestFocusInsteadOfProjection, resultBrightfield);
+        resultBrightfield = generateMIPBrightFieldStack(imp, fluorescentChannelArrayList, brightfieldChannel, projectionMethod, degreeofFocusMethod, NO, WITH_BRIGHTFIELD, useBestFocusInsteadOfProjection, resultBrightfield);
       }
       else if(mergeChannel==BOTH)
       {
-        generateMIPBrightFieldStack(imp, fluorescentChannelArrayList, brightfieldChannel, projectionMethod, degreeofFocusMethod, YES, channelOption);
-        generateMIPBrightFieldStack(imp, fluorescentChannelArrayList, brightfieldChannel, projectionMethod, degreeofFocusMethod, NO, channelOption);
+        resultBrightfield = generateMIPBrightFieldStack(imp, fluorescentChannelArrayList, brightfieldChannel, projectionMethod, degreeofFocusMethod, YES, channelOption, useBestFocusInsteadOfProjection, resultBrightfield);
+        resultBrightfield = generateMIPBrightFieldStack(imp, fluorescentChannelArrayList, brightfieldChannel, projectionMethod, degreeofFocusMethod, NO, channelOption, useBestFocusInsteadOfProjection, resultBrightfield);
       }
       else if(channelOption==BOTH)
       {
-        generateMIPBrightFieldStack(imp, fluorescentChannelArrayList, brightfieldChannel, projectionMethod, degreeofFocusMethod, mergeChannel, FLUORESCENT_ONLY);
-        generateMIPBrightFieldStack(imp, fluorescentChannelArrayList, brightfieldChannel, projectionMethod, degreeofFocusMethod, mergeChannel, WITH_BRIGHTFIELD);
+        resultBrightfield = generateMIPBrightFieldStack(imp, fluorescentChannelArrayList, brightfieldChannel, projectionMethod, degreeofFocusMethod, mergeChannel, FLUORESCENT_ONLY, useBestFocusInsteadOfProjection, resultBrightfield);
+        resultBrightfield = generateMIPBrightFieldStack(imp, fluorescentChannelArrayList, brightfieldChannel, projectionMethod, degreeofFocusMethod, mergeChannel, WITH_BRIGHTFIELD, useBestFocusInsteadOfProjection, resultBrightfield);
       }
       else
-        generateMIPBrightFieldStack(imp, fluorescentChannelArrayList, brightfieldChannel, projectionMethod, degreeofFocusMethod, mergeChannel, channelOption);
+        resultBrightfield = generateMIPBrightFieldStack(imp, fluorescentChannelArrayList, brightfieldChannel, projectionMethod, degreeofFocusMethod, mergeChannel, channelOption, useBestFocusInsteadOfProjection, resultBrightfield);
     }
   }
 
@@ -165,16 +170,27 @@ public class Auto_Focus implements PlugIn, DialogListener
    * {@link ij.plugin.ZProjector.SUM_METHOD}, {@link ij.plugin.ZProjector.SD_METHOD} and
    * {@link ij.plugin.ZProjector.MEDIAN_METHOD}.
    */
-  public void generateMIPBrightFieldStack(ImagePlus imp, ArrayList<Integer> fluorescentChannelList, 
+  public BestFocusStackResult generateMIPBrightFieldStack(ImagePlus imp, ArrayList<Integer> fluorescentChannelList, 
       int brightfieldChannel, int zProjectionMethod, int degreeofFocusMethod, int mergeChannel, 
-      int channelOption)
+      int channelOption, boolean useBestFocusInsteadOfProjection, BestFocusStackResult resultBrightfield)
   {
     ImagePlus brightfieldImp = null;
+    int[] bestFocusPositionArray = null;
+    
+    //if (useBestFocusInsteadOfProjection)
     
     //1. Generate the BestFocus BrightField Stack
-    if(channelOption!=FLUORESCENT_ONLY)
+    if(resultBrightfield==null && (channelOption!=FLUORESCENT_ONLY || useBestFocusInsteadOfProjection))
     {
-      brightfieldImp = computeAutoFocusStack(imp, brightfieldChannel, degreeofFocusMethod);
+      resultBrightfield = computeAutoFocusStack(imp, brightfieldChannel, degreeofFocusMethod);//BestFocusStackResult
+      //brightfieldImp = computeAutoFocusStack(imp, brightfieldChannel, degreeofFocusMethod);
+      brightfieldImp = resultBrightfield.getStack();
+      bestFocusPositionArray = resultBrightfield.getPositionArray();
+    }
+    else if(resultBrightfield!=null)
+    {
+      brightfieldImp = resultBrightfield.getStack();
+      bestFocusPositionArray = resultBrightfield.getPositionArray();
     }
     //2. Keep the LUT
     LUT[] lutArray = imp.getLuts();    
@@ -194,7 +210,10 @@ public class Auto_Focus implements PlugIn, DialogListener
           //ImagePlus[] impArray = new ImagePlus[2];
           int mipChannel= fluorescentChannelList.get(i);
           System.out.println("MIP on channel :"+mipChannel);
-          impArray[0]=getZProjection(imp, mipChannel, zProjectionMethod);
+          if(useBestFocusInsteadOfProjection)
+            impArray[0]=getZFromIndex(imp, mipChannel,bestFocusPositionArray);
+          else
+            impArray[0]=getZProjection(imp, mipChannel, zProjectionMethod);
           ImagePlus result;
           if(channelOption!=FLUORESCENT_ONLY)
           {
@@ -236,7 +255,10 @@ public class Auto_Focus implements PlugIn, DialogListener
         {
           int mipChannel= fluorescentChannelList.get(i);
           System.out.println("MIP on channel :"+mipChannel);
-          impArray[i]=getZProjection(imp, mipChannel, zProjectionMethod);
+          if(useBestFocusInsteadOfProjection)
+            impArray[i]=getZFromIndex(imp, mipChannel,bestFocusPositionArray);
+          else
+            impArray[i]=getZProjection(imp, mipChannel, zProjectionMethod);
         }
         if(channelOption!=FLUORESCENT_ONLY)
           impArray[fluorescentChannelList.size()]=brightfieldImp.duplicate();
@@ -266,11 +288,14 @@ public class Auto_Focus implements PlugIn, DialogListener
         
       }
     }
-    else
+    else if(channelOption!=FLUORESCENT_ONLY)
+    {
       brightfieldImp.show();
       brightfieldImp.getProcessor().setLut(LUT.createLutFromColor(Color.GRAY));
       brightfieldImp.updateAndDraw();
-      
+    }
+    
+    return resultBrightfield;      
   }
   
   /**
@@ -295,7 +320,58 @@ public class Auto_Focus implements PlugIn, DialogListener
     projImage.setCalibration(imp.getCalibration());
 
     return projImage;
-  }  
+  }
+  
+  public ImagePlus getZFromIndex(ImagePlus imp, int selectedChannel,int[] indexArray)
+  {
+    int tNumber = -1;
+    int width=-1;
+    int height = -1;
+    int bitdepth = -1;
+    ImagePlus stack;
+    ImageProcessor lastIP=null;
+    
+    tNumber = imp.getNFrames();
+    width = imp.getWidth();
+    height = imp.getHeight();
+    bitdepth = imp.getBitDepth();
+    if(bitdepth<=8)
+      bitdepth=8;
+    if(bitdepth>8 && bitdepth<=16)
+      bitdepth=16;    
+    
+    stack = IJ.createHyperStack("AutoFocused",
+        width,
+        height,
+        1,
+        1,
+        tNumber,
+        bitdepth);  
+    
+    for(int t=1;t<=tNumber;t++)
+    {
+      System.out.print("For time "+t+", ");
+      ImageProcessor bestIp;
+      IJ.showProgress(t, tNumber);
+      int index = imp.getStackIndex(selectedChannel, indexArray[t-1], t);
+      imp.setSliceWithoutUpdate(index);
+      bestIp = imp.getProcessor().duplicate();      
+      stack.setPositionWithoutUpdate(1, 1, t);
+      stack.setProcessor(bestIp);
+      if(t==tNumber-1)
+        lastIP=bestIp;
+    }
+    //Weird hack since the last slice is not properly added
+    //Remove the last slice that is black (empty)
+    stack.getStack().deleteLastSlice();
+    //Replace it with the last slice (which was supposed to be set at line stack.setProcessor(bestIp);)
+    stack.getStack().addSlice(lastIP);
+    stack.setPositionWithoutUpdate(1, 1, 1);    
+    stack.setCalibration(imp.getCalibration());
+    
+    return stack;
+    
+  }
   
   /**From a multiple channel Hyperstack, get the selected channel and return
    * the best autofocus Z slices accross time.
@@ -305,7 +381,7 @@ public class Auto_Focus implements PlugIn, DialogListener
    * @param selectedChannel : the brightfield channel number
    * @return the best focus stack across time of the selected channel stack XYT
    */
-  public ImagePlus computeAutoFocusStack(ImagePlus imp, int selectedChannel, int degreeofFocusMethod)
+  public BestFocusStackResult computeAutoFocusStack(ImagePlus imp, int selectedChannel, int degreeofFocusMethod)
   {
     int zNumber = -1;
     int tNumber = -1;
@@ -315,6 +391,10 @@ public class Auto_Focus implements PlugIn, DialogListener
     ImagePlus stack;
     ImageProcessor[] ipArray;
     ImageProcessor lastIP=null;
+    
+    BestFocusStackResult resultStack = new BestFocusStackResult();
+    
+    int[] bestPositionArray= new int[imp.getNFrames()];
     
     zNumber = imp.getNSlices();
     tNumber = imp.getNFrames();
@@ -346,7 +426,11 @@ public class Auto_Focus implements PlugIn, DialogListener
         ip = imp.getProcessor().duplicate();
         ipArray[z-1]=ip;
       }
-      bestIp = getBestZFocus(ipArray, degreeofFocusMethod); 
+      //bestIp = getBestZFocus(ipArray, degreeofFocusMethod, bestPositionArray[t-1]);
+      BestFocusResult result = getBestZFocus(ipArray, degreeofFocusMethod);
+      bestIp = result.getIp();
+      bestPositionArray[t-1]=result.getPosition();
+      
       stack.setPositionWithoutUpdate(1, 1, t);
       stack.setProcessor(bestIp);
       if(t==tNumber-1)
@@ -359,7 +443,10 @@ public class Auto_Focus implements PlugIn, DialogListener
     stack.getStack().addSlice(lastIP);
     stack.setPositionWithoutUpdate(1, 1, 1);
     
-    return stack;
+    resultStack.setStack(stack);
+    resultStack.setPositionArray(bestPositionArray);
+    
+    return resultStack;
   }
 
   //TODO: A much better algorithm should be used it:
@@ -369,8 +456,10 @@ public class Auto_Focus implements PlugIn, DialogListener
    * @param ipArray the array of image processor
    * @return the supposedly best focus Z-plan AKA the one with the highest mean intensity
    */
-  private ImageProcessor getBestZFocus(ImageProcessor[] ipArray, int method)
+  private BestFocusResult getBestZFocus(ImageProcessor[] ipArray, int method)
   {
+    BestFocusResult result = new BestFocusResult();
+    
     int best=0;
     double quality=0;
     double measure=0;
@@ -384,7 +473,10 @@ public class Auto_Focus implements PlugIn, DialogListener
         best=z;
       }
     }
-    return ipArray[best].duplicate();
+    result.setPosition(best);
+    result.setIp(ipArray[best]);
+    //return ipArray[best].duplicate();
+    return result;
   }
 
 }
